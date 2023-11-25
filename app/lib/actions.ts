@@ -5,11 +5,33 @@ import { sql } from '@vercel/postgres';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 
+export type State = {
+    errors?: {
+        customerId?: string[];
+        amount?: string[];
+        status?: string[];
+    };
+    message?: string | null;
+}
+
+const handlingFormErrors = {
+    customerIdError: {
+        invalid_type_error: 'Please select a customer.',
+    },
+    amountError: {
+        message: 'Please enter an amount greater than $0.',
+    },
+    statusError: {
+        invalid_type_error: 'Please select a status.',
+    }
+}
+
+
 const FormSchema = z.object({
     id: z.string(),
-    customerId: z.string(),
-    amount: z.coerce.number(),
-    status: z.enum(['pending', 'paid']),
+    customerId: z.string(handlingFormErrors.customerIdError),
+    amount: z.coerce.number().gt(0, handlingFormErrors.amountError),
+    status: z.enum(['pending', 'paid'], handlingFormErrors.statusError),
     date: z.string()
 })
 
@@ -17,7 +39,7 @@ const UpdateInvoice = FormSchema.omit({id: true, date: true});
 
 const CreateInvoice = FormSchema.omit({id: true, date: true});
 
-export async function createInvoice(formData: FormData) {
+export async function createInvoice(prevState: State, formData: FormData) {
     // both methods works:
 
     // const rawFormData = {
@@ -27,7 +49,15 @@ export async function createInvoice(formData: FormData) {
     // }
     
     const rawFormData = Object.fromEntries(formData.entries());
-    const {customerId, amount, status} = CreateInvoice.parse(rawFormData);
+    const validateFields = CreateInvoice.safeParse(rawFormData);
+
+    if (!validateFields.success) {
+        return {
+            errors: validateFields.error.flatten().fieldErrors,
+            message: 'Missing Fields. Failed to Create Invoice.'
+        }
+    }
+    const {customerId, amount, status} = validateFields.data;
     const amountInCents = amount * 100 | 0;
     const date = new Date().toISOString().split('T')[0];
     try{
@@ -36,19 +66,28 @@ export async function createInvoice(formData: FormData) {
             VALUES (${customerId}, ${amountInCents}, ${status}, ${date})
         `   
     } catch(error) {
-        console.error(error);
+        return {
+            message: 'Database Error: Failed to Create Invoices.'
+        }
     }
     revalidatePath('/dashboard/invoices');
     redirect('/dashboard/invoices');
-    
 }
 
-export async function updateInvoice(id: string, formData: FormData) {
+export async function updateInvoice(id: string, prevState: State, formData: FormData) {
     
-    const { customerId, amount, status } = UpdateInvoice.parse({
-        ...Object.fromEntries(formData.entries())
-    })
+    const rawFormData = Object.fromEntries(formData.entries());
+    const validateFields = UpdateInvoice.safeParse(rawFormData);
+
+    if (!validateFields.success) {
+        return {
+            errors: validateFields.error.flatten().fieldErrors,
+            message: 'Missing Fields. Failed to Update Invoice.'
+        }
+    }
+    const { customerId, amount, status } = validateFields.data;
     const amountInCents = amount * 100 | 0;
+    
     try {
         await sql`
             UPDATE invoices
